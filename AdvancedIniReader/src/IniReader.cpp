@@ -22,29 +22,43 @@ namespace Config{
         return std::all_of(str.begin(), str.end(), [](char ch) { return std::isspace(ch); });
     }
 
+    struct ParsedValue {
+        std::string value;
+        std::string coment;
+    };
+
     class Item{
         private:
         std::string m_key;
         std::string m_value;
+        std::string m_coment = "";
+        bool m_hasComent = false;
+
         public:
-        Item(const std::string& key, const std::string& value) : m_key(key), m_value(value) {}
+        Item(const std::string& key, const ParsedValue& parsedValue) : m_key(key), m_value(parsedValue.value) {
+            if (!parsedValue.coment.empty()) {
+                m_coment = parsedValue.coment;
+                m_hasComent = true;
+            }
+        }
+
+        Item() = default;
 
         template<typename Type>
         Type Get() const {
-            print(m_value);
             std::istringstream iss(m_value);
             Type value;
             if (!(iss >> value))
                 throw std::invalid_argument("Невозможно привести к типу");
-            
             return value;
         }
 
         template<>
         std::string Get() const{
+            if (m_value.front() == '\'' || m_value.front() == '\"')
+                return m_value.substr(1, m_value.size() -2);
             return m_value;
         }
-
 
         template<typename Type>
         void Set(const Type& value){
@@ -53,29 +67,48 @@ namespace Config{
             m_value = oss.str();
         }
 
+        std::string GetKey() const {
+            return m_key;
+        }
 
         friend std::ostream& operator<<(std::ostream& os, const Item& item) {
-            os << item.m_key << "=" << item.m_value;
+            std::string coment = item.m_hasComent ? " " + item.m_coment : "";
+            os << item.m_key << "=" << item.m_value << coment;
             return os;
         }
     };
 
-    class Section{
-        private:
+    class Section {
+    private:
         std::string m_sectionName;
         std::vector<std::string> m_itemOrder;
         std::unordered_map<std::string, Item> m_item;
 
-        public:
+    public:
         Section(const std::string& name) : m_sectionName(name) {}
 
-        void Add(const std::string& key, const std::string& value) {
+        void Add(const std::string& key, const ParsedValue& parsedValue) {
             m_itemOrder.emplace_back(key);
-            m_item.emplace(key, Item(key, value));
+            m_item.emplace(key, Item(key, parsedValue));
         }
 
-        Item& operator[](const char* key){
-            return m_item.at(key);
+        template<typename Type>
+        void AddItem(const std::string& key, const Type& value) {
+            if (!IsAlpha(key))
+                throw std::invalid_argument("Ключ должен состоять только из букв и не иметь пробелы");
+
+            if (m_item.find(key) != m_item.end())
+                throw std::invalid_argument("Запись уже существует");
+
+
+            std::ostringstream oss;
+            oss << value;
+            Add(key, { oss.str(), "" });
+        }
+
+        template<>
+        void AddItem(const std::string& key, const std::string& value) {
+            Add(key, { '\"' + value + '\"', ""});
         }
 
         const Item& operator[](const char* key) const{
@@ -161,6 +194,8 @@ namespace Config{
     class INI{
         private:
         std::string m_filename;
+        bool m_writeState = false;
+
         std::vector<std::string> m_sectionOrder;
         std::unordered_map<std::string, Section> m_section;
 
@@ -176,8 +211,11 @@ namespace Config{
                 ++lineIdx;
 
                 // I. Empty or Commented line
-                if (line.empty() || line.front() == '#' || line.front() == ';')
+                if (line.empty())
                     continue;
+
+                if (line.front() == '#' || line.front() == ';')
+                    throw std::invalid_argument("Комментарии на отдельных строках не поддерживаются");
 
                 // II. Section
                 if (!ParseSection()){
@@ -216,9 +254,9 @@ namespace Config{
             return false;
         }
 
-        bool ParseItem(){
-            size_t equalSing =  std::count(line.begin(), line.end(), '=');
-                
+        bool ParseItem() {
+            size_t equalSing = std::count(line.begin(), line.end(), '=');
+
             if (equalSing != 1)
                 throw std::invalid_argument("Syntax error. Пара должна содержать один знак =");
 
@@ -235,21 +273,24 @@ namespace Config{
                 throw std::invalid_argument("Ключ должен содержать только буквенные символы");
 
             // 2. Value
-            std::string value = line.substr(delimIdx+1);
+            ParsedValue parsedValue;
+
+            std::string value = line.substr(delimIdx + 1);
             Strip(value);
 
             // 2.1 String
             if (value.front() == '\"' || value.front() == '\'')
-                ParseString(value);
+                parsedValue = ParseString(value);
             // 2.2 Int & Float
             else
-                ParseNumber(value);
+                parsedValue = ParseNumber(value);
 
-            activeSection->Add(key,value);
+            activeSection->Add(key, parsedValue);
+
             return true;
         }
 
-        void ParseString(std::string& value){
+        ParsedValue ParseString(std::string& value){
             char leftQMark;
             char rightQMark;
             leftQMark = value.front();
@@ -259,42 +300,48 @@ namespace Config{
             if (rightQMarkIdx == std::string::npos)
                 throw std::invalid_argument("Строка записана неправильно");
             else if (rightQMarkIdx == value.size() -1){
-                value = value.substr(1, value.size() - 2);
-                return;
+                return { value , ""};
             }
 
-            VerifyComent(value.substr(rightQMarkIdx+1));
-            value = value.substr(1, rightQMarkIdx-1);
+            return { value.substr(0, rightQMarkIdx+1), VerifyComent(value.substr(rightQMarkIdx + 1)) };
         }
 
-        void ParseNumber(std::string& value){
+        ParsedValue ParseNumber(std::string& value){
             size_t comentBeginIdx = value.find_first_of("#; ");
-            if (comentBeginIdx != std::string::npos){
-                value = value.substr(0, comentBeginIdx);
-                VerifyComent(value.substr(comentBeginIdx));
+            ParsedValue result;
+
+            if (comentBeginIdx != std::string::npos){ 
+                result = { value.substr(0, comentBeginIdx), VerifyComent(value.substr(comentBeginIdx)) };
+            }
+            else {
+                result = { value, "" };
             }
 
             size_t dotCount = 0;
-            for(size_t i=0; i<value.size(); ++i){
-                if (i==0 && i+1 == value.size() && value[i] == '.')
+            for(size_t i=0; i<result.value.size(); ++i){
+                if (i==0 && i+1 == result.value.size() && result.value[i] == '.')
                     throw std::invalid_argument("Неправильная запись числа");
 
-                if (value[i] =='.' && ++dotCount > 1)
+                if (result.value[i] =='.' && ++dotCount > 1)
                     throw std::invalid_argument("Число не может содержать больше одной точки");
 
-                if (!(std::isdigit(value[i]) || value[i] == '.'))
+                if (!(std::isdigit(result.value[i]) || result.value[i] == '.'))
                     throw std::invalid_argument("Число должно содержать только цифры");
             }
+
+            return result;
         }
 
-        void VerifyComent(const std::string& str){
+        // Verify & Return Coment
+        std::string VerifyComent(const std::string& str) {
             size_t comentSignIdx = str.find_first_of("#;");
             std::string space = str.substr(0, comentSignIdx);
 
             if (!IsSpace(space))
                 throw std::invalid_argument("Неожиданные символы. Если вы хотели оставить комментарий используйте # или ;");
-        }
 
+            return str.substr(comentSignIdx);
+        }
 
         public:
         INI(const std::string& filename) : m_filename(filename) {
@@ -303,6 +350,7 @@ namespace Config{
                 throw std::invalid_argument("Парсер не смог открыть файл");
 
             Parse(file);
+            file.close();
         }
 
         Section& operator[](const char* key){
@@ -321,14 +369,18 @@ namespace Config{
             }
             return os;
         }
+
+        void Save() {
+            m_writeState = true;
+
+            std::ofstream file(m_filename);
+            if (!file.is_open())
+                throw std::invalid_argument("Неудалось открыть файл");
+
+            file << *this;
+            file.close();
+            m_writeState = false;
+        }
+
     };
-}
-
-
-using Ini = Config::INI;
-using Section = Config::Section;
-using Item = Config::Item;
-
-int main(){
-
 }
