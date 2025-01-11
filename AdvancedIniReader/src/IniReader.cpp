@@ -53,6 +53,11 @@ namespace Config{
             m_value = oss.str();
         }
 
+
+        friend std::ostream& operator<<(std::ostream& os, const Item& item) {
+            os << item.m_key << "=" << item.m_value;
+            return os;
+        }
     };
 
     class Section{
@@ -77,6 +82,80 @@ namespace Config{
             return m_item.at(key);
         }
 
+        class Iterator {
+        private:
+            std::string* m_ptr;
+            Section* m_section;
+
+        public:
+            Iterator(std::string* ptr, Section* section) : m_ptr(ptr), m_section(section) {}
+
+            Item& operator*() {
+                return m_section->m_item.at(*m_ptr);
+            }
+
+            bool operator!=(const Iterator& other) const {
+                return m_ptr != other.m_ptr;
+            }
+
+            Iterator& operator++() {
+                ++m_ptr;
+                return *this;
+            }
+
+            Iterator operator++(int) {
+                return Iterator(m_ptr++, m_section);
+            }
+        };
+
+        class ConstIterator {
+        private:
+            const std::string* m_ptr;
+            const Section* m_section;
+
+        public:
+            ConstIterator(const std::string* ptr, const Section* section) : m_ptr(ptr), m_section(section) {}
+
+            const Item& operator*() const {
+                return m_section->m_item.at(*m_ptr);
+            }
+
+            bool operator!=(const ConstIterator& other) const {
+                return m_ptr != other.m_ptr;
+            }
+
+            ConstIterator& operator++() {
+                ++m_ptr;
+                return *this;
+            }
+
+            ConstIterator operator++(int){
+                return ConstIterator(m_ptr++, m_section);
+            }
+        };
+
+        Iterator begin() { return Iterator(&(*m_itemOrder.begin()), this); }
+
+        Iterator end() { return Iterator(m_itemOrder.data() + m_itemOrder.size(), this); }
+        
+        ConstIterator begin() const { return cbegin(); }
+
+        ConstIterator end() const { return cend(); }
+
+        ConstIterator cbegin() const { return ConstIterator(&(*m_itemOrder.begin()), this); }
+
+        ConstIterator cend() const { return ConstIterator(m_itemOrder.data() + m_itemOrder.size(), this); }
+
+        friend std::ostream& operator<<(std::ostream& os, const Section& section) {
+            os << '[' << section.m_sectionName << ']' << std::endl;
+            bool firstLine = true;
+
+            for (const auto& item : section) {
+                os << (firstLine ? "" : "\n") << item;
+                firstLine = false;
+            }
+            return os;
+        }
     };
 
     class INI{
@@ -89,8 +168,6 @@ namespace Config{
         Section* activeSection = nullptr;
 
         private:
-        INI(const std::string& filename) : m_filename(filename) {}
-
         void Parse(std::ifstream& file){
             size_t lineIdx = 0;
             Section* activeSection = nullptr;
@@ -218,15 +295,14 @@ namespace Config{
                 throw std::invalid_argument("Неожиданные символы. Если вы хотели оставить комментарий используйте # или ;");
         }
 
+
         public:
-        static INI Load(const std::string& filename){
-            std::ifstream file(filename);
+        INI(const std::string& filename) : m_filename(filename) {
+            std::ifstream file(m_filename);
             if (!file.is_open())
                 throw std::invalid_argument("Парсер не смог открыть файл");
 
-            INI ini(filename); // Будет ли копия в итоге?
-            ini.Parse(file);
-            return ini;
+            Parse(file);
         }
 
         Section& operator[](const char* key){
@@ -236,8 +312,18 @@ namespace Config{
         const Section& operator[](const char* key) const{
             return m_section.at(key);
         }
+
+        friend std::ostream& operator<<(std::ostream& os, const INI& ini) {
+            bool firstLine = true;
+            for (const auto& sectionName : ini.m_sectionOrder) {
+                os << (firstLine ? "" : "\n\n") << ini.m_section.at(sectionName);
+                firstLine = false;
+            }
+            return os;
+        }
     };
 }
+
 
 using Ini = Config::INI;
 using Section = Config::Section;
