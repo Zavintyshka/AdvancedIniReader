@@ -127,7 +127,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\IniReader.cpp" />
+    <ClInclude Include="src\IniReader.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\IniReaderExceptions.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
