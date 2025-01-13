@@ -133,6 +133,10 @@ namespace Config{
             }
         }
 
+        bool HasItem(const std::string& key) {
+            return m_item.find(key) != m_item.end();
+        }
+
         class Iterator {
         private:
             std::string* m_ptr;
